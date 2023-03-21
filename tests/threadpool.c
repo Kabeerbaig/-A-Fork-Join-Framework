@@ -19,8 +19,8 @@ struct thread_pool {
     pthread_cond_t cond;
     // pool mutex
     pthread_mutex_t lock;
-    // access
-    bool access;
+    // shutdown
+    bool shutdown;
 };
 struct future {
     // future is basially a long runnning task
@@ -36,10 +36,10 @@ struct future {
     // when the future task is complete
     int completed;
     //pointer for result job
-    void *result;
-    void *info;
+    void *args; // data from thread_pool_submit
+    void *results; // will store task results once its complete
     struct list_elem elem;
-    // 0: not doing anything; 1: working on task; 2: done with tast
+    // 0: not doing anything; 1: working on task; 2: done with task
     int state;
     struct thread_pool *pool;
     
@@ -61,7 +61,7 @@ struct thread_pool * thread_pool_new(int nthreads) {
     pthread_cond_init(&pool->cond, NULL);
     list_init(&pool->global_queue);
     list_init(&pool->job_queue);
-    pool->access = false;
+    pool->shutdown = false;
 
     for (int i = 0; i < nthreads; i++) {
         struct worker *worker = malloc(sizeof(struct worker));
@@ -76,19 +76,34 @@ struct thread_pool * thread_pool_new(int nthreads) {
 }
 
 static void *work_thread(void *arg) {
-    struct worker *work = (struct worker*)arg;
-    struct thread_pool *pool = work->pool;
-    struct list_elem *elem;
-    struct list *queue;
-    struct future *futre;
+   
+    struct thread_pool *pool = (struct ThreadPool*)arg;
+    struct worker *worker = NULL;
     
 
     while (1) {
         
         pthread_mutex_lock(&pool->lock);
+       // checks to see if any tasks need to be completed
+       // if the queues are empty then run in idle mode
+        while (no_pending_work(pool)) {
+            pthread_cond_wait(&pool->cond, &pool->lock);
+        }
+        // checks shutdown falg
+        if (pool->shutdown) {
+            pthread_mutex_unlock(&pool->lock);
+            break;
+        }
+        // Get the next task to execute 
+        struct future *futre = get_next_task(pool, worker);
+        pthread_unlock_mutex(&pool->lock);
+        // execute task and sets future results (got this from the slides)
+        futre->results = (futre->task)(pool,futre->results);
+        pthread_mutex_lock(&pool->lock);
+        futre->state = 2; // 2 to mean completed 
+        pthread_cond_signal(&futre->cond);
+        pthread_mutex_unlock(&pool->lock);
 
-        
-        
     }
     return NULL;
 }
@@ -96,7 +111,7 @@ static void *work_thread(void *arg) {
 void thread_pool_shutdown_and_destroy(struct thread_pool *pool) {
 
     pthread_mutex_lock(&pool->lock);
-    pool->access = true;
+    pool->shutdown = true;
 
     if (pthread_cond_broadcast(&pool->cond) != 0) {
         pthread_mutex_unlock(&pool->lock);
@@ -115,4 +130,62 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool) {
     pthread_cond_destroy(&pool->cond);
     pthread_mutex_destroy(&pool->lock);
     free(pool);
+}
+
+
+// Returns true if there is no pending work in any of the queues, false otherwise.
+ 
+static bool no_pending_work(struct thread_pool *pool) {
+    struct list_elem *e;
+    struct worker *worker;
+
+    // Check if any worker queue has pending work
+    for (e = list_begin(&pool->job_queue); e != list_end(&pool->job_queue); e = list_next(e)) {
+        worker = list_entry(e, struct worker, elem);
+        if (!list_empty(&worker->work_queue)) {
+            return false;
+        }
+    }
+
+    // Check if the global queue has pending work
+    if (!list_empty(&pool->global_queue)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Returns the next task to be executed, or NULL if there is no pending work.
+ * Tasks are taken in a first-come, first-served basis from the worker queues and
+ * the global queue, with workers preferring to take from their own queues before
+ * the global queue.
+ */
+static struct list_elem *get_next_task(struct thread_pool *pool, struct worker *worker) {
+    struct list_elem *e;
+
+    // Check worker's own queue
+    if (!list_empty(&worker->work_queue)) {
+        e = list_pop_front(&worker->work_queue);
+        return e;
+    }
+
+    // Check global queue
+    if (!list_empty(&pool->global_queue)) {
+        e = list_pop_front(&pool->global_queue);
+        return e;
+    }
+
+    // Steal from other workers
+    struct list_elem *ele;
+    struct worker *work;
+    for (ele = list_begin(&pool->job_queue); ele != list_end(&pool->job_queue); ele = list_next(ele)) {
+        work = list_entry(ele, struct worker, elem);
+        if (work != worker && !list_empty(&work->work_queue)) {
+            e = list_pop_back(&work->work_queue);
+            return e;
+        }
+    }
+
+    return NULL;
 }
