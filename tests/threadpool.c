@@ -86,13 +86,12 @@ struct thread_pool *thread_pool_new(int nthreads)
 static void *work_thread(void *arg)
 {
 
-    struct thread_pool *pool = (struct ThreadPool *)arg;
-
     // TODO: how to get the current threads worker information?
-    struct worker *worker = NULL;
+    struct worker *curr_worker = arg;
+    struct thread_pool *pool = curr_worker->pool;
 
     // set the worker tasks list to differenentiate between global or local submission
-    worker_tasks_list = &worker->work_queue;
+    worker_tasks_list = &curr_worker->work_queue;
 
     pthread_mutex_lock(&pool->lock);
     while (true)
@@ -111,12 +110,12 @@ static void *work_thread(void *arg)
             break;
         }
         // Get the next task to execute
-        struct future *futre = get_next_task(pool, worker);
+        struct future *curr_future = get_next_task(pool, curr_worker);
 
         // execute task and sets future results (got this from the slides)
-        futre->results = (futre->task)(pool, futre->results);
-        futre->state = 2; // 2 to mean completed
-        pthread_cond_signal(&futre->cond);
+        curr_future->results = (curr_future->task)(pool, curr_future->results);
+        curr_future->state = 2; // 2 to mean completed
+        pthread_cond_signal(&curr_future->cond);
     }
     pthread_mutex_unlock(&pool->lock);
     return NULL;
