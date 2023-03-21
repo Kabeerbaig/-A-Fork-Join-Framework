@@ -4,6 +4,8 @@
 #include <threads.h>
 #include "list.h"
 #include "threadpool.h"
+#include <errno.h>
+
 #include <stdbool.h>
 // static void *work_thread(void *);
 
@@ -136,14 +138,15 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
     pthread_cond_broadcast(&pool->cond);
     pthread_mutex_unlock(&pool->lock);
 
-    struct list_elem *e;
+    struct list_elem *e = list_begin(&pool->worker_list);
 
-    for (e = list_begin(&pool->worker_list); e != list_end(&pool->worker_list); e = list_next(e))
+    for (int i = 0; i < pool->num_threads; i++)
     {
         struct worker *curr_worker = list_entry(e, struct worker, elem);
-        printf("REMOVED \n");
+
         pthread_join(curr_worker->id, NULL);
         free(curr_worker);
+        e = list_next(e);
     }
 
     pthread_cond_destroy(&pool->cond);
@@ -161,7 +164,7 @@ static bool no_pending_work(struct thread_pool *pool)
     // checks shutdown falg
     if (pool->shutdown)
     {
-        return true;
+        return false;
     }
 
     // Check if any worker queue has pending work
@@ -285,6 +288,8 @@ void *future_get(struct future *future_task)
     if (future_task->state == 0 && worker_tasks_list != NULL)
     {
         execute_future(future_task);
+        pthread_mutex_unlock(&future_task->pool->lock);
+
         return future_task->results;
     }
 
