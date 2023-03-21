@@ -17,8 +17,9 @@ struct thread_pool
     // number of threads
     int num_threads;
     // strct list_elems
-    //  array for the local queue, pointer because we need one for each thread?
+    //  array for the workers
     struct list worker_list;
+    // queue for the futures
     struct list global_queue;
     // condition variable for work thread
     pthread_cond_t cond;
@@ -39,8 +40,7 @@ struct future
     // signal this variable and waiting thread will proceed to execute
     //(Ahmed Yazdani class lecture)
     pthread_cond_t cond;
-    // when the future task is complete
-    int completed;
+
     // pointer for result job
     void *args;    // data from thread_pool_submit
     void *results; // will store task results once its complete
@@ -87,15 +87,17 @@ static void *work_thread(void *arg)
 {
 
     struct thread_pool *pool = (struct ThreadPool *)arg;
+
+    // TODO: how to get the current threads worker information?
     struct worker *worker = NULL;
 
     // set the worker tasks list to differenentiate between global or local submission
     worker_tasks_list = &worker->work_queue;
 
-    while (1)
+    pthread_mutex_lock(&pool->lock);
+    while (true)
     {
 
-        pthread_mutex_lock(&pool->lock);
         // checks to see if any tasks need to be completed
         // if the queues are empty then run in idle mode
         while (no_pending_work(pool))
@@ -110,14 +112,13 @@ static void *work_thread(void *arg)
         }
         // Get the next task to execute
         struct future *futre = get_next_task(pool, worker);
-        pthread_unlock_mutex(&pool->lock);
+
         // execute task and sets future results (got this from the slides)
         futre->results = (futre->task)(pool, futre->results);
-        pthread_mutex_lock(&pool->lock);
         futre->state = 2; // 2 to mean completed
         pthread_cond_signal(&futre->cond);
-        pthread_mutex_unlock(&pool->lock);
     }
+    pthread_mutex_unlock(&pool->lock);
     return NULL;
 }
 
@@ -170,6 +171,8 @@ static bool no_pending_work(struct thread_pool *pool)
     {
         return false;
     }
+
+    // TODO: Implement work stealing here
 
     return true;
 }
@@ -224,10 +227,42 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
      *
      * need to use a thread local variable to distinguish between an internal and external submission
      */
+
+    // allocate new future
+    struct future *new_future = malloc(sizeof(struct future));
+
+    // set task and args for future
+    new_future->task = task;
+    new_future->args = data;
+    new_future->pool = pool;
+
+    // if thread local variable null, then place future into global queue
+    // else, place in local queue
+    if (worker_tasks_list == NULL)
+    {
+        pthread_mutex_lock(&pool->lock);
+
+        list_push_back(&pool->global_queue, &new_future->elem);
+
+        pthread_mutex_unlock(&pool->lock);
+    }
+    else
+    {
+        // TODO: How to get the worker info?
+        list_push_front()
+    }
 }
 
 void *future_get(struct future *future_task)
 {
+    // TODO: How to wait for future task to be completed?
+    while (future_task->results != 2)
+    {
+        // waiting on future_task conditional and give it the pool lock? or should give it the thread lock
+        pthread_cond_wait(&future_task->cond, &future_task->pool->lock);
+    }
+
+    return future_task->results;
 }
 
 void future_free(struct future *future_task)

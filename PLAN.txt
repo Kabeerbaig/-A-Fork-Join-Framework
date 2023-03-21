@@ -1,0 +1,73 @@
+Need to implement a fork-join thread pool that can steal work
+
+
+Work Stealing
+    Each worker thread maintains its own local queue of tasks
+
+        when a task run by a worker spawns a new task  
+            add(push) to the bottom of the worker's queue
+        
+        workers execute tasks by popping them from the bottom
+
+        if a worker runs out of tasks
+            check global submission queue for tasks
+            if a task can be found, it is executed
+                else it attempts to steal tasks from the top of thread queue's
+            
+
+
+
+
+
+First implementation of project
+    one lock
+        this ensures atomicity 
+
+
+
+
+functions needed to implement for work sharing
+
+    thread_pool_new
+        - create thread pool
+        - initialize n worker threads
+            - call pthread_create, starts a new thread in the calling process
+            - pthread_create(pointer to pthread, NULL, worker function loop, pool)
+            - set thread_local variable to the list of local futures that the worker has
+    
+
+    static worker function loop
+        - lock pool
+        - loop until there are no more futures to be done
+            - complete any local futures that the worker has (Pop from front)
+            - if none, grab a future from the global queue (Pop from back) and execute it
+        - unlock pool
+
+
+    thread_pool_submit
+        - allocate new future
+            - struct future *future_task = malloc(sizeof(future))
+              future_task->task = task
+              future_task->args = data
+
+        -check thread_local variable
+            -if NULL, add future to global queue (Push to the back of the list)
+                lock pool
+                add future to the global queue
+                unlock pool
+            -else, add future to local queue (Pop to the front of the queue)
+
+
+    thread_pool_shutdown_and_destroy
+        - clean workers? not sure what this entails yet
+        - destroy lock and condition variable for pool
+
+
+    future_get
+        - check on the state of the future
+            if 0 or 1, wait until the state of the future is 2
+        - when 2, return future_task->results
+
+
+    future_free
+        - Deallocate future
