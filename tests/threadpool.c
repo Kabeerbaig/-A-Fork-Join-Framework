@@ -121,7 +121,9 @@ static void *work_thread(void *arg)
         struct future *curr_future = get_next_task(pool, curr_worker);
 
         // execute task and sets future results (got this from the slides)
-        curr_future->results = (curr_future->task)(pool, curr_future->args);
+        pthread_mutex_unlock(&pool->lock);
+        curr_future->results = curr_future->task(pool, curr_future->args);
+        pthread_mutex_lock(&pool->lock);
         curr_future->state = 2; // 2 to mean completed
         pthread_cond_signal(&curr_future->cond);
 
@@ -313,7 +315,9 @@ void future_free(struct future *future_task)
 
 static void *execute_future(struct future *curr_future)
 {
-    curr_future->results = (curr_future->task)(curr_future->pool, curr_future->results);
+    pthread_mutex_unlock(&curr_future->pool->lock);
+    curr_future->results = curr_future->task(curr_future->pool, curr_future->results);
+    pthread_mutex_lock(&curr_future->pool->lock);
     curr_future->state = 2; // 2 to mean completed
     pthread_cond_signal(&curr_future->cond);
 
