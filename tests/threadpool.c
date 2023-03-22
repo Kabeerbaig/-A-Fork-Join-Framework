@@ -281,6 +281,11 @@ void *future_get(struct future *future_task)
 {
     pthread_mutex_lock(&future_task->pool->lock);
 
+    if (future_task->state == 2)
+    {
+        pthread_mutex_unlock(&future_task->pool->lock);
+        return future_task->results;
+    }
     // if not in main thread and task not yet started/completed
     // complete the task and return it
     if (worker_tasks_list != NULL && future_task->state == 0)
