@@ -198,8 +198,6 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         e = list_pop_front(&worker->work_queue);
 
         new_future = list_entry(e, struct future, elem);
-        new_future->state = 1;
-        pthread_cond_signal(&new_future->cond);
 
         return new_future;
     }
@@ -209,8 +207,6 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
     {
         e = list_pop_back(&pool->global_queue);
         new_future = list_entry(e, struct future, elem);
-        new_future->state = 1;
-        pthread_cond_signal(&new_future->cond);
 
         return new_future;
     }
@@ -225,8 +221,6 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         {
             e = list_pop_back(&work->work_queue);
             new_future = list_entry(e, struct future, elem);
-            new_future->state = 1;
-            pthread_cond_signal(&new_future->cond);
 
             return new_future;
         }
@@ -281,22 +275,25 @@ void *future_get(struct future *future_task)
 {
     pthread_mutex_lock(&future_task->pool->lock);
 
+    // if the future is already complete then we can just return it
     if (future_task->state == 2)
     {
         pthread_mutex_unlock(&future_task->pool->lock);
         return future_task->results;
     }
-    // if not in main thread and task not yet started/completed
+    // if internal thread and task not yet started
     // complete the task and return it
     if (worker_tasks_list != NULL && future_task->state == 0)
     {
+        list_remove(&future_task->elem);
         execute_future(future_task);
         pthread_mutex_unlock(&future_task->pool->lock);
 
         return future_task->results;
     }
 
-    // else main thread should wait until the future is completed
+    // else it is an internal thread waiting for the future to complete
+    // or the main thread
     while (future_task->state != 2)
     {
         // waiting on future_task conditional and give it the pool lock? or should give it the thread lock
@@ -310,20 +307,22 @@ void *future_get(struct future *future_task)
 
 void future_free(struct future *future_task)
 {
-    // pthread_cond_destroy(&future_task->cond);
-    // free(future_task);
+    pthread_cond_destroy(&future_task->cond);
+    free(future_task);
 }
 
 static void *execute_future(struct future *curr_future)
 {
     struct thread_pool *pool = curr_future->pool;
+    curr_future->state = 1;
+    pthread_cond_signal(&curr_future->cond);
 
     // execute task and sets future results
     pthread_mutex_unlock(&pool->lock);
     curr_future->results = curr_future->task(pool, curr_future->args);
     // calls pthread submit and future get
-
     pthread_mutex_lock(&pool->lock);
+
     curr_future->state = 2; // 2 to mean completed
     pthread_cond_signal(&curr_future->cond);
 
