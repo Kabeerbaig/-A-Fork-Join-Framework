@@ -58,6 +58,7 @@ struct worker
     // queue of the worker
     struct list work_queue;
     // track id of the worker thread
+    pthread_mutex_t lock;
     pthread_t id;
     struct thread_pool *pool;
 };
@@ -84,6 +85,7 @@ struct thread_pool *thread_pool_new(int nthreads)
         worker->pool = pool;
         list_push_front(&pool->worker_list, &worker->elem);
         list_init(&worker->work_queue);
+        pthread_mutex_init(&worker->lock, NULL);
         pthread_create(&worker->id, NULL, work_thread, worker);
     }
     pthread_mutex_unlock(&pool->lock);
