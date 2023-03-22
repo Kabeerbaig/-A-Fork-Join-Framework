@@ -63,7 +63,7 @@ struct worker
 /* thread-local worker*/
 static thread_local struct worker *local_worker = NULL;
 
-static bool no_pending_work(struct thread_pool *pool);
+static bool no_pending_work(struct thread_pool *pool, struct worker *worker);
 static struct future *get_next_task(struct thread_pool *pool, struct worker *worker);
 static void *work_thread(void *arg);
 static void *execute_future(struct future *curr_future);
@@ -107,12 +107,12 @@ static void *work_thread(void *arg)
 
         // checks to see if any tasks need to be completed
         // if the queues are empty then run in idle mode
-        while (no_pending_work(pool))
+        while (no_pending_work(pool, local_worker))
         {
             pthread_cond_wait(&pool->cond, &pool->lock);
         }
 
-        // checks shutdown falg
+        // checks shutdown flag
         if (pool->shutdown)
         {
             pthread_mutex_unlock(&pool->lock);
@@ -155,8 +155,13 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
 
 // Returns true if there is no pending work in any of the queues, false otherwise.
 
-static bool no_pending_work(struct thread_pool *pool)
+static bool no_pending_work(struct thread_pool *pool, struct worker *worker)
 {
+
+    if (!list_empty(&worker->work_queue))
+    {
+        return false;
+    }
 
     // checks shutdown falg
     if (pool->shutdown)
@@ -267,7 +272,10 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
     }
     else
     {
+        pthread_mutex_lock(&pool->lock);
         list_push_front(&local_worker->work_queue, &new_future->elem);
+        pthread_cond_broadcast(&pool->cond);
+        pthread_mutex_unlock(&pool->lock);
     }
 
     return new_future;
