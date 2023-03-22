@@ -142,8 +142,8 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
         struct worker *curr_worker = list_entry(e, struct worker, elem);
 
         pthread_join(curr_worker->id, NULL);
-        free(curr_worker);
         e = list_next(e);
+        free(curr_worker);
     }
 
     pthread_cond_destroy(&pool->cond);
@@ -155,8 +155,6 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
 
 static bool no_pending_work(struct thread_pool *pool)
 {
-    struct list_elem *e;
-    struct worker *worker;
 
     // checks shutdown falg
     if (pool->shutdown)
@@ -165,13 +163,14 @@ static bool no_pending_work(struct thread_pool *pool)
     }
 
     // Check if any worker queue has pending work
-    for (e = list_begin(&pool->worker_list); e != list_end(&pool->worker_list); e = list_next(e))
+    struct list_elem *e = list_begin(&pool->worker_list);
+
+    for (int i = 0; i < pool->num_threads; i++)
     {
-        worker = list_entry(e, struct worker, elem);
-        if (!list_empty(&worker->work_queue))
-        {
+        struct worker *curr_worker = list_entry(e, struct worker, elem);
+
+        if (!list_empty(&curr_worker->work_queue))
             return false;
-        }
     }
 
     // Check if the global queue has pending work
@@ -256,6 +255,8 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
     new_future->pool = pool;
     new_future->state = 0;
 
+    pthread_cond_init(&new_future->cond, NULL);
+
     // if thread local variable null, then place future into global queue
     // else, place in local queue
     if (worker_tasks_list == NULL)
@@ -282,7 +283,7 @@ void *future_get(struct future *future_task)
 
     // if not in main thread and task not yet started/completed
     // complete the task and return it
-    if (future_task->state == 0 && worker_tasks_list != NULL)
+    if (worker_tasks_list != NULL && future_task->state == 0)
     {
         execute_future(future_task);
         pthread_mutex_unlock(&future_task->pool->lock);
@@ -304,15 +305,15 @@ void *future_get(struct future *future_task)
 
 void future_free(struct future *future_task)
 {
-    pthread_cond_destroy(&future_task->cond);
-    free(future_task);
+    // pthread_cond_destroy(&future_task->cond);
+    // free(future_task);
 }
 
 static void *execute_future(struct future *curr_future)
 {
     struct thread_pool *pool = curr_future->pool;
 
-    // execute task and sets future results (got this from the slides)
+    // execute task and sets future results
     pthread_mutex_unlock(&pool->lock);
     curr_future->results = curr_future->task(pool, curr_future->args);
     // calls pthread submit and future get
