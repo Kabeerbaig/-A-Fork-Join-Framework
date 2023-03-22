@@ -9,9 +9,6 @@
 #include <stdbool.h>
 // static void *work_thread(void *);
 
-/* thread-local worker list*/
-static thread_local struct list *worker_tasks_list = NULL;
-
 struct thread_pool
 {
     // Array of threads
@@ -63,6 +60,9 @@ struct worker
     struct thread_pool *pool;
 };
 
+/* thread-local worker*/
+static thread_local struct worker *local_worker = NULL;
+
 static bool no_pending_work(struct thread_pool *pool);
 static struct future *get_next_task(struct thread_pool *pool, struct worker *worker);
 static void *work_thread(void *arg);
@@ -99,7 +99,7 @@ static void *work_thread(void *arg)
     struct thread_pool *pool = curr_worker->pool;
 
     // set the worker tasks list to differenentiate between global or local submission
-    worker_tasks_list = &curr_worker->work_queue;
+    local_worker = curr_worker;
 
     while (true)
     {
@@ -255,7 +255,7 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
 
     // if thread local variable null, then place future into global queue
     // else, place in local queue
-    if (worker_tasks_list == NULL)
+    if (local_worker == NULL)
     {
         pthread_mutex_lock(&pool->lock);
 
@@ -267,7 +267,7 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
     }
     else
     {
-        list_push_front(worker_tasks_list, &new_future->elem);
+        list_push_front(&local_worker->work_queue, &new_future->elem);
     }
 
     return new_future;
@@ -285,7 +285,7 @@ void *future_get(struct future *future_task)
     }
     // if internal thread and task not yet started
     // complete the task and return it
-    if (worker_tasks_list != NULL && future_task->state == 0)
+    if (local_worker != NULL && future_task->state == 0)
     {
         list_remove(&future_task->elem);
         execute_future(future_task);
