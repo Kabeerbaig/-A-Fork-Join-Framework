@@ -297,6 +297,8 @@ void *future_get(struct future *future_task)
     {
         list_remove(&future_task->elem);
         execute_future(future_task);
+        // pthread_cond_signal(&future_task->pool->cond);
+
         pthread_mutex_unlock(&future_task->pool->lock);
 
         return future_task->results;
@@ -326,6 +328,7 @@ static void *execute_future(struct future *curr_future)
     struct thread_pool *pool = curr_future->pool;
     curr_future->state = 1;
     pthread_cond_signal(&curr_future->cond);
+    // pthread_cond_signal(&curr_future->pool->cond);
 
     // execute task and sets future results
     pthread_mutex_unlock(&pool->lock);
