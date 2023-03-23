@@ -60,6 +60,7 @@ struct worker
     // track id of the worker thread
     pthread_t id;
     struct thread_pool *pool;
+    pthread_mutex_t lock;
 };
 
 static bool no_pending_work(struct thread_pool *pool);
@@ -78,12 +79,14 @@ struct thread_pool *thread_pool_new(int nthreads)
     pool->shutdown = false;
 
     pthread_mutex_lock(&pool->lock);
+    
     for (int i = 0; i < nthreads; i++)
     {
         struct worker *worker = malloc(sizeof(struct worker));
         worker->pool = pool;
         list_push_front(&pool->worker_list, &worker->elem);
         list_init(&worker->work_queue);
+        pthread_mutex_init(&worker->lock, NULL);
         pthread_create(&worker->id, NULL, work_thread, worker);
     }
     pthread_mutex_unlock(&pool->lock);
@@ -143,6 +146,7 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
 
         pthread_join(curr_worker->id, NULL);
         e = list_next(e);
+        pthread_mutex_destroy(&curr_worker->lock);
         free(curr_worker);
     }
 
@@ -219,7 +223,9 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         work = list_entry(ele, struct worker, elem);
         if (work != worker && !list_empty(&work->work_queue))
         {
+            pthread_mutex_lock(&work->lock);
             e = list_pop_back(&work->work_queue);
+            pthread_mutex_unlock(&work->lock);
             new_future = list_entry(e, struct future, elem);
 
             return new_future;
@@ -259,13 +265,16 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
 
         list_push_back(&pool->global_queue, &new_future->elem);
         pthread_cond_broadcast(&pool->cond);
-        pthread_cond_signal(&new_future->cond);
+        pthread_cond_broadcast(&new_future->cond);
 
         pthread_mutex_unlock(&pool->lock);
     }
     else
     {
+        struct worker *curr_worker =  list_entry(list_begin(&pool->worker_list), struct worker, elem);
+        pthread_mutex_lock(&curr_worker->lock);
         list_push_front(worker_tasks_list, &new_future->elem);
+        pthread_mutex_unlock(&curr_worker->lock);
     }
 
     return new_future;
