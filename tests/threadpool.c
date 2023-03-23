@@ -63,7 +63,7 @@ struct worker
 /* thread-local worker*/
 static thread_local struct worker *local_worker = NULL;
 
-static bool no_pending_work(struct thread_pool *pool, struct worker *worker);
+// static bool no_pending_work(struct thread_pool *pool, struct worker *worker);
 static struct future *get_next_task(struct thread_pool *pool, struct worker *worker);
 static void *work_thread(void *arg);
 static void *execute_future(struct future *curr_future);
@@ -78,7 +78,6 @@ struct thread_pool *thread_pool_new(int nthreads)
     list_init(&pool->worker_list);
     pool->shutdown = false;
 
-    pthread_mutex_lock(&pool->lock);
     for (int i = 0; i < nthreads; i++)
     {
         struct worker *worker = malloc(sizeof(struct worker));
@@ -86,9 +85,15 @@ struct thread_pool *thread_pool_new(int nthreads)
         list_push_front(&pool->worker_list, &worker->elem);
         list_init(&worker->work_queue);
         pthread_mutex_init(&worker->lock, NULL);
+    }
+
+    struct list_elem *ele;
+    struct worker *worker;
+    for (ele = list_begin(&pool->worker_list); ele != list_end(&pool->worker_list); ele = list_next(ele))
+    {
+        worker = list_entry(ele, struct worker, elem);
         pthread_create(&worker->id, NULL, work_thread, worker);
     }
-    pthread_mutex_unlock(&pool->lock);
 
     return pool;
 }
@@ -104,23 +109,24 @@ static void *work_thread(void *arg)
     while (true)
     {
         pthread_mutex_lock(&pool->lock);
+        // Get the next task to execute
+        struct future *curr_future = get_next_task(pool, curr_worker);
 
         // checks to see if any tasks need to be completed
         // if the queues are empty then run in idle mode
-        while (no_pending_work(pool, local_worker))
+        while (curr_future == NULL)
         {
             pthread_cond_wait(&pool->cond, &pool->lock);
+            curr_future = get_next_task(pool, curr_worker);
         }
 
         // checks shutdown flag
         if (pool->shutdown)
         {
+            free(curr_future);
             pthread_mutex_unlock(&pool->lock);
             break;
         }
-
-        // Get the next task to execute
-        struct future *curr_future = get_next_task(pool, curr_worker);
 
         execute_future(curr_future);
 
@@ -155,39 +161,39 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
 
 // Returns true if there is no pending work in any of the queues, false otherwise.
 
-static bool no_pending_work(struct thread_pool *pool, struct worker *worker)
-{
+// static bool no_pending_work(struct thread_pool *pool, struct worker *worker)
+// {
 
-    if (!list_empty(&worker->work_queue))
-    {
-        return false;
-    }
+//     if (!list_empty(&worker->work_queue))
+//     {
+//         return false;
+//     }
 
-    // checks shutdown falg
-    if (pool->shutdown)
-    {
-        return false;
-    }
+//     // checks shutdown falg
+//     if (pool->shutdown)
+//     {
+//         return false;
+//     }
 
-    // Check if any worker queue has pending work
-    struct list_elem *e = list_begin(&pool->worker_list);
+//     // Check if any worker queue has pending work
+//     struct list_elem *e = list_begin(&pool->worker_list);
 
-    for (int i = 0; i < pool->num_threads; i++)
-    {
-        struct worker *curr_worker = list_entry(e, struct worker, elem);
+//     for (int i = 0; i < pool->num_threads; i++)
+//     {
+//         struct worker *curr_worker = list_entry(e, struct worker, elem);
 
-        if (!list_empty(&curr_worker->work_queue))
-            return false;
-    }
+//         if (!list_empty(&curr_worker->work_queue))
+//             return false;
+//     }
 
-    // Check if the global queue has pending work
-    if (!list_empty(&pool->global_queue))
-    {
-        return false;
-    }
+//     // Check if the global queue has pending work
+//     if (!list_empty(&pool->global_queue))
+//     {
+//         return false;
+//     }
 
-    return true;
-}
+//     return true;
+// }
 
 /**
  * Returns the next task to be executed, or NULL if there is no pending work.
@@ -215,6 +221,12 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         e = list_pop_back(&pool->global_queue);
         new_future = list_entry(e, struct future, elem);
 
+        return new_future;
+    }
+
+    if (pool->shutdown)
+    {
+        new_future = malloc(sizeof(struct future));
         return new_future;
     }
 
@@ -327,7 +339,7 @@ static void *execute_future(struct future *curr_future)
 {
     struct thread_pool *pool = curr_future->pool;
     curr_future->state = 1;
-    pthread_cond_signal(&curr_future->cond);
+
     // pthread_cond_signal(&curr_future->pool->cond);
 
     // execute task and sets future results
