@@ -159,42 +159,6 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
     free(pool);
 }
 
-// Returns true if there is no pending work in any of the queues, false otherwise.
-
-// static bool no_pending_work(struct thread_pool *pool, struct worker *worker)
-// {
-
-//     if (!list_empty(&worker->work_queue))
-//     {
-//         return false;
-//     }
-
-//     // checks shutdown falg
-//     if (pool->shutdown)
-//     {
-//         return false;
-//     }
-
-//     // Check if any worker queue has pending work
-//     struct list_elem *e = list_begin(&pool->worker_list);
-
-//     for (int i = 0; i < pool->num_threads; i++)
-//     {
-//         struct worker *curr_worker = list_entry(e, struct worker, elem);
-
-//         if (!list_empty(&curr_worker->work_queue))
-//             return false;
-//     }
-
-//     // Check if the global queue has pending work
-//     if (!list_empty(&pool->global_queue))
-//     {
-//         return false;
-//     }
-
-//     return true;
-// }
-
 /**
  * Returns the next task to be executed, or NULL if there is no pending work.
  * Tasks are taken in a first-come, first-served basis from the worker queues and
