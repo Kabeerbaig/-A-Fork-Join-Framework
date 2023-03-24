@@ -92,7 +92,11 @@ struct thread_pool *thread_pool_new(int nthreads)
     for (ele = list_begin(&pool->worker_list); ele != list_end(&pool->worker_list); ele = list_next(ele))
     {
         worker = list_entry(ele, struct worker, elem);
-        pthread_create(&worker->id, NULL, work_thread, worker);
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 1024 * 1024);
+
+        pthread_create(&worker->id, &attr, work_thread, worker);
     }
 
     return pool;
