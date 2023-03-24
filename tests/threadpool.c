@@ -169,15 +169,20 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
 {
     struct list_elem *e;
     struct future *new_future;
+
+    pthread_mutex_unlock(&pool->lock);
+    pthread_mutex_lock(&worker->lock);
     // Check worker's own queue
     if (!list_empty(&worker->work_queue))
     {
         e = list_pop_front(&worker->work_queue);
-
         new_future = list_entry(e, struct future, elem);
+        pthread_mutex_unlock(&worker->lock);
 
         return new_future;
     }
+    pthread_mutex_unlock(&worker->lock);
+    pthread_mutex_lock(&pool->lock);
 
     // Check global queue
     if (!list_empty(&pool->global_queue))
@@ -194,20 +199,27 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         return new_future;
     }
 
+    // pthread_mutex_unlock(&pool->lock);
     // Steal from other workers
     struct list_elem *ele;
     struct worker *work;
     for (ele = list_begin(&pool->worker_list); ele != list_end(&pool->worker_list); ele = list_next(ele))
     {
         work = list_entry(ele, struct worker, elem);
+        pthread_mutex_lock(&worker->lock);
+
         if (work != worker && !list_empty(&work->work_queue))
         {
             e = list_pop_back(&work->work_queue);
             new_future = list_entry(e, struct future, elem);
+            pthread_mutex_unlock(&worker->lock);
+            // pthread_mutex_lock(&pool->lock);
 
             return new_future;
         }
+        pthread_mutex_unlock(&worker->lock);
     }
+    // pthread_mutex_lock(&pool->lock);
 
     return NULL;
 }
@@ -273,7 +285,6 @@ void *future_get(struct future *future_task)
     {
         list_remove(&future_task->elem);
         execute_future(future_task);
-        // pthread_cond_signal(&future_task->pool->cond);
 
         pthread_mutex_unlock(&future_task->pool->lock);
 
@@ -303,8 +314,6 @@ static void *execute_future(struct future *curr_future)
 {
     struct thread_pool *pool = curr_future->pool;
     curr_future->state = 1;
-
-    // pthread_cond_signal(&curr_future->pool->cond);
 
     // execute task and sets future results
     pthread_mutex_unlock(&pool->lock);
