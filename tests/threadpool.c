@@ -254,7 +254,7 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
 
         list_push_back(&pool->global_queue, &new_future->elem);
         pthread_cond_broadcast(&pool->cond);
-        pthread_cond_signal(&new_future->cond);
+        // pthread_cond_signal(&new_future->cond);
 
         pthread_mutex_unlock(&pool->lock);
     }
