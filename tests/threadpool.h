@@ -20,7 +20,7 @@ struct thread_pool * thread_pool_new(int nthreads);
 *
 * Deallocate the thread pool object before returning.
 */
-void thread_pool_shutdown_and_destroy(struct thread_pool *);
+void thread_pool_shutdown_and_destroy(struct thread_pool * pool);
 /* A function pointer representing a ’fork/join’ task.
 * Tasks are represented as a function pointer to a
 * function.
