@@ -10,11 +10,11 @@
 #
 # for benchmarking we'll use this.
 # Note that this defines NDEBUG, which removes all assert()s from your code
-CFLAGS=-pthread -Wall -O3 -Werror -Wmissing-prototypes -fopenmp -DNDEBUG
-LDFLAGS=-pthread
+# CFLAGS=-pthread -Wall -O3 -Werror -Wmissing-prototypes -fopenmp -DNDEBUG
+# LDFLAGS=-pthread
 # for debugging, you may use these 2
-# LDFLAGS=-pthread -fsanitize=undefined
-# CFLAGS=-Wall -O0 -g -Werror -Wmissing-prototypes -fopenmp -fsanitize=undefined
+LDFLAGS=-pthread -fsanitize=undefined
+CFLAGS=-Wall -O0 -g -Werror -Wmissing-prototypes -fopenmp -fsanitize=undefined
 
 OBJ=threadpool.o list.o threadpool_lib.o
 

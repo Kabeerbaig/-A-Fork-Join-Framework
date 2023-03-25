@@ -47,6 +47,9 @@ struct future
     // 0: not doing anything; 1: working on task; 2: done with task
     int state;
     struct thread_pool *pool;
+
+    pthread_mutex_t *worker_lock;
+    struct worker *worker;
 };
 
 struct worker
@@ -67,6 +70,7 @@ static thread_local struct worker *local_worker = NULL;
 static struct future *get_next_task(struct thread_pool *pool, struct worker *worker);
 static void *work_thread(void *arg);
 static void *execute_future(struct future *curr_future);
+// static struct future *work_helping(struct worker *);
 
 struct thread_pool *thread_pool_new(int nthreads)
 {
@@ -113,12 +117,13 @@ static void *work_thread(void *arg)
     while (true)
     {
         pthread_mutex_lock(&pool->lock);
+
         // Get the next task to execute
         struct future *curr_future = get_next_task(pool, curr_worker);
 
         // checks to see if any tasks need to be completed
         // if the queues are empty then run in idle mode
-        while (curr_future == NULL)
+        while (curr_future == NULL && (!pool->shutdown))
         {
             pthread_cond_wait(&pool->cond, &pool->lock);
             curr_future = get_next_task(pool, curr_worker);
@@ -127,14 +132,13 @@ static void *work_thread(void *arg)
         // checks shutdown flag
         if (pool->shutdown)
         {
-            free(curr_future);
             pthread_mutex_unlock(&pool->lock);
             break;
         }
-
-        execute_future(curr_future);
-
         pthread_mutex_unlock(&pool->lock);
+
+        pthread_mutex_lock(curr_future->worker_lock);
+        execute_future(curr_future);
     }
     return NULL;
 }
@@ -152,8 +156,14 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool)
     for (int i = 0; i < pool->num_threads; i++)
     {
         struct worker *curr_worker = list_entry(e, struct worker, elem);
-
+        pthread_mutex_unlock(&curr_worker->lock);
         pthread_join(curr_worker->id, NULL);
+        e = list_next(e);
+    }
+    e = list_begin(&pool->worker_list);
+    for (int i = 0; i < pool->num_threads; i++)
+    {
+        struct worker *curr_worker = list_entry(e, struct worker, elem);
         e = list_next(e);
         free(curr_worker);
     }
@@ -174,20 +184,6 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
     struct list_elem *e;
     struct future *new_future;
 
-    pthread_mutex_unlock(&pool->lock);
-    pthread_mutex_lock(&worker->lock);
-    // Check worker's own queue
-    if (!list_empty(&worker->work_queue))
-    {
-        e = list_pop_front(&worker->work_queue);
-        new_future = list_entry(e, struct future, elem);
-        pthread_mutex_unlock(&worker->lock);
-
-        return new_future;
-    }
-    pthread_mutex_unlock(&worker->lock);
-    pthread_mutex_lock(&pool->lock);
-
     // Check global queue
     if (!list_empty(&pool->global_queue))
     {
@@ -197,34 +193,28 @@ static struct future *get_next_task(struct thread_pool *pool, struct worker *wor
         return new_future;
     }
 
-    if (pool->shutdown)
-    {
-        new_future = malloc(sizeof(struct future));
-        return new_future;
-    }
+    pthread_mutex_unlock(&pool->lock);
 
-    // pthread_mutex_unlock(&pool->lock);
     // Steal from other workers
     struct list_elem *ele;
     struct worker *work;
     for (ele = list_begin(&pool->worker_list); ele != list_end(&pool->worker_list); ele = list_next(ele))
     {
         work = list_entry(ele, struct worker, elem);
-        pthread_mutex_lock(&worker->lock);
+        pthread_mutex_lock(&work->lock);
 
         if (work != worker && !list_empty(&work->work_queue))
         {
             e = list_pop_back(&work->work_queue);
             new_future = list_entry(e, struct future, elem);
-            pthread_mutex_unlock(&worker->lock);
-            // pthread_mutex_lock(&pool->lock);
-
+            pthread_mutex_unlock(&work->lock);
+            pthread_mutex_lock(&pool->lock);
             return new_future;
         }
-        pthread_mutex_unlock(&worker->lock);
+        pthread_mutex_unlock(&work->lock);
     }
-    // pthread_mutex_lock(&pool->lock);
 
+    pthread_mutex_lock(&pool->lock);
     return NULL;
 }
 
@@ -248,6 +238,17 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
     new_future->pool = pool;
     new_future->state = 0;
 
+    if (local_worker == NULL)
+    {
+        new_future->worker_lock = &pool->lock;
+        new_future->worker = NULL;
+    }
+    else
+    {
+        new_future->worker_lock = &local_worker->lock;
+        new_future->worker = local_worker;
+    }
+
     pthread_cond_init(&new_future->cond, NULL);
 
     // if thread local variable null, then place future into global queue
@@ -258,16 +259,15 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
 
         list_push_back(&pool->global_queue, &new_future->elem);
         pthread_cond_broadcast(&pool->cond);
-        // pthread_cond_signal(&new_future->cond);
 
         pthread_mutex_unlock(&pool->lock);
     }
     else
     {
-        pthread_mutex_lock(&pool->lock);
+        pthread_mutex_lock(&local_worker->lock);
         list_push_front(&local_worker->work_queue, &new_future->elem);
         pthread_cond_broadcast(&pool->cond);
-        pthread_mutex_unlock(&pool->lock);
+        pthread_mutex_unlock(&local_worker->lock);
     }
 
     return new_future;
@@ -275,12 +275,13 @@ struct future *thread_pool_submit(struct thread_pool *pool, fork_join_task_t tas
 
 void *future_get(struct future *future_task)
 {
-    pthread_mutex_lock(&future_task->pool->lock);
+
+    pthread_mutex_lock(future_task->worker_lock);
 
     // if the future is already complete then we can just return it
     if (future_task->state == 2)
     {
-        pthread_mutex_unlock(&future_task->pool->lock);
+        pthread_mutex_unlock(future_task->worker_lock);
         return future_task->results;
     }
     // if internal thread and task not yet started
@@ -288,22 +289,34 @@ void *future_get(struct future *future_task)
     if (local_worker != NULL && future_task->state == 0)
     {
         list_remove(&future_task->elem);
+        future_task->worker = local_worker;
         execute_future(future_task);
-
-        pthread_mutex_unlock(&future_task->pool->lock);
-
         return future_task->results;
     }
+
+    // if internal thread and waiting for future to finish, attempt to help
+    // if (local_worker != NULL && future_task->state != 2)
+    // {
+    //     struct future *stolen_future = work_helping(future_task->worker);
+    //     if (stolen_future != NULL)
+    //     {
+    //         pthread_mutex_unlock(future_task->worker_lock);
+
+    //         stolen_future->worker = local_worker;
+    //         pthread_mutex_lock(&local_worker->lock);
+    //         execute_future(stolen_future);
+    //     }
+    // }
 
     // else it is an internal thread waiting for the future to complete
     // or the main thread
     while (future_task->state != 2)
     {
         // waiting on future_task conditional and give it the pool lock? or should give it the thread lock
-        pthread_cond_wait(&future_task->cond, &future_task->pool->lock);
+        pthread_cond_wait(&future_task->cond, future_task->worker_lock);
     }
 
-    pthread_mutex_unlock(&future_task->pool->lock);
+    pthread_mutex_unlock(future_task->worker_lock);
 
     return future_task->results;
 }
@@ -317,16 +330,47 @@ void future_free(struct future *future_task)
 static void *execute_future(struct future *curr_future)
 {
     struct thread_pool *pool = curr_future->pool;
+    if (curr_future->state == 2)
+    {
+        pthread_mutex_unlock(curr_future->worker_lock);
+        return NULL;
+    }
     curr_future->state = 1;
-
+    pthread_cond_signal(&curr_future->cond);
     // execute task and sets future results
-    pthread_mutex_unlock(&pool->lock);
+    pthread_mutex_unlock(curr_future->worker_lock);
     curr_future->results = curr_future->task(pool, curr_future->args);
     // calls pthread submit and future get
-    pthread_mutex_lock(&pool->lock);
+    pthread_mutex_lock(curr_future->worker_lock);
 
     curr_future->state = 2; // 2 to mean completed
     pthread_cond_signal(&curr_future->cond);
 
+    pthread_mutex_unlock(curr_future->worker_lock);
+
     return NULL;
 }
+
+// static struct future *work_helping(struct worker *victim)
+// {
+//     // Steal from other worker
+//     struct list_elem *e;
+
+//     if (!list_empty(&victim->work_queue))
+//     {
+//         e = list_back(&victim->work_queue);
+
+//         while (e != list_begin(&victim->work_queue))
+//         {
+//             struct future *curr_future = list_entry(e, struct future, elem);
+//             if (curr_future->state == 0)
+//             {
+//                 list_remove(&curr_future->elem);
+//                 return curr_future;
+//             }
+//             e = list_prev(e);
+//         }
+//     }
+
+//     return NULL;
+// }
